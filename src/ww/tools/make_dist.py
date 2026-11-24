@@ -6,6 +6,8 @@ README = '日本語化MOD_はじめにお読みください.txt'
 FILES = [('dll/dinput.dll', 'dinput.dll'),
          ('dist/WWJP/wwjp.tsv', 'WWJP/wwjp.tsv')]
 zp = 'dist/WizardsWarriors_JP.zip'
+if b'WWJP_TEST' in open('dll/dinput.dll', 'rb').read():
+    raise SystemExit('dll/dinput.dll が試験版です。dll/build.bat（引数なし）で配布版を作ってください')
 txt = open('dist_src/はじめにお読みください.txt', encoding='utf-8').read().replace('\r\n', '\n').replace('\n', '\r\n')
 with zipfile.ZipFile(zp, 'w', zipfile.ZIP_DEFLATED) as z:
     for src, dst in FILES:

@@ -2,6 +2,7 @@
  *  - 本物の dinput.dll へ DirectInputCreate* を渡す
  *  - deep6.exe（GOG 版）の文字列を描く・幅を測る・入る字数を数える関数を EUC-JP 対応のものに置き換える
  *  - 文章のファイル 9 つを開くとき、原本と WWJP\wwjp.tsv から日本語版を組み立てて一時フォルダに書き、そちらを開かせる
+ *  試験用の仕組み（記録、入力の差し込み、窓表示）は WWJP_TEST を付けた試験版（build.bat test）にだけ入る
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
@@ -32,12 +33,16 @@ typedef HRESULT (WINAPI *DICreateA)(HINSTANCE, DWORD, void **, void *);
 typedef HRESULT (WINAPI *DICreateEx)(HINSTANCE, DWORD, const void *, void **, void *);
 typedef HRESULT (WINAPI *DIGetClass)(const void *, const void *, void **);
 typedef HRESULT (WINAPI *DICanUnload)(void);
+#ifdef WWJP_TEST
 static void di_wrap(void *di);
+#endif
 HRESULT WINAPI DirectInputCreateA(HINSTANCE h, DWORD v, void **o, void *u)
 {
     DICreateA f = (DICreateA)get_real("DirectInputCreateA");
     HRESULT r = f ? f(h, v, o, u) : E_FAIL;
+#ifdef WWJP_TEST
     if (r == S_OK && o && *o) di_wrap(*o);
+#endif
     return r;
 }
 HRESULT WINAPI DirectInputCreateW(HINSTANCE h, DWORD v, void **o, void *u)
@@ -49,8 +54,9 @@ HRESULT WINAPI DllGetClassObject(const void *a, const void *b, void **c)
 HRESULT WINAPI DllCanUnloadNow(void)
 { DICanUnload f = (DICanUnload)get_real("DllCanUnloadNow"); return f ? f() : S_FALSE; }
 
-/* ---- 記録 ---- */
+/* ---- 記録（試験版で WWJP_LOG のときだけ。配布版では何もしない） ---- */
 static char gamedir[MAX_PATH], jpdir[MAX_PATH], tmpdir[MAX_PATH];
+#ifdef WWJP_TEST
 static FILE *logf;
 static void logp(const char *fmt, ...)
 {
@@ -61,6 +67,9 @@ static void logp(const char *fmt, ...)
     va_end(ap);
     fflush(logf);
 }
+#else
+#define logp(...) ((void)0)
+#endif
 
 /* ---- 訳の表（鍵 → EUC-JP の文） ---- */
 #define HSIZE 65536
@@ -620,7 +629,8 @@ static int draw_jp(u8 *f, FInfo *fi, int c1, int c2)
     return 1;
 }
 
-/* 訳の無い英文を記録する（WWJP_LOG のとき） */
+/* 訳の無い英文を記録する（試験版で WWJP_LOG のとき） */
+#ifdef WWJP_TEST
 static unsigned seen[8192];
 static void log_untranslated(const u8 *s)
 {
@@ -636,11 +646,14 @@ static void log_untranslated(const u8 *s)
     seen[i] = h;
     logp("英: %s\n", s);
 }
+#endif
 
 static void c_drawstring(u8 *f, const u8 *s)
 {
     FInfo *fi = font_info(f);
+#ifdef WWJP_TEST
     log_untranslated(s);
+#endif
     while (*s) {
         if (is_jp(s)) {
             if (!draw_jp(f, fi, s[0], s[1])) return;
@@ -857,6 +870,7 @@ __declspec(naked) static void H_FitR(void)
     }
 }
 
+#ifdef WWJP_TEST
 /* ---- 試験の入力（WWJP_TEST のとき）: 共有メモリ "WWJP_IN" からマウスとキーを混ぜる ----
  * マウス: GOG 版は 0x5F11E0 の関数（POINT* を埋める）で位置を得て、0x5E903C/3D/3E がボタン。
  *         その関数を差し替え、指定の位置とボタンを返す。
@@ -1035,6 +1049,7 @@ __declspec(naked) static void H_Sprintf(void)
         ret
     }
 }
+#endif /* WWJP_TEST */
 
 /* ---- 書き換え ---- */
 static void write_jmp(DWORD at, void *to)
@@ -1069,6 +1084,7 @@ static void set_iat(DWORD at, void *fn, void *expect)
     VirtualProtect(p, 4, old, &old);
 }
 
+#ifdef WWJP_TEST
 /* ---- 試験のときだけ: GOG の ddraw.dll が作る Direct3D 9 の画面を窓表示にする（前面でなくても最小化されない） ---- */
 typedef void *(WINAPI *D3DCreate9_t)(UINT);
 typedef HRESULT (WINAPI *D3DCreateDev_t)(void *, UINT, int, HWND, DWORD, DWORD *, void **);
@@ -1247,6 +1263,7 @@ static void patch_locks(void)
     FlushInstructionCache(GetCurrentProcess(), NULL, 0);
     logp("Lock の確かめ %d か所%c", n, 10);
 }
+#endif /* WWJP_TEST */
 
 /* 折り返しの「空白まで戻る」比べ（cmp byte ptr [..],20h / je）を、
  * 「空白か、EUC の字（0xA1 以上）なら区切れる」に置き換える */
@@ -1397,11 +1414,13 @@ static void install(void)
     *p = 0;
     strcpy(gamedir, exe);
     sprintf(jpdir, "%s\\WWJP", gamedir);
+#ifdef WWJP_TEST
     if (GetEnvironmentVariableA("WWJP_LOG", NULL, 0)) {
         char lp[MAX_PATH];
         sprintf(lp, "%s\\log.txt", jpdir);
         logf = fopen(lp, "w");
     }
+#endif
     /* deep6.exe（GOG 版）か確かめる */
     if (!check(0x424C94, "5351565755") || !check(0x424DCC, "53515657") ||
         !check(0x424E0C, "5156575583EC08") || !check(0x424E6C, "5156575583EC10") ||
@@ -1414,6 +1433,7 @@ static void install(void)
     strcat(tmpdir, "WWJP");
     CreateDirectoryA(tmpdir, NULL);
     load_table();
+#ifdef WWJP_TEST
     if (GetEnvironmentVariableA("WWJP_TEST", NULL, 0)) {
         test_init();
         real_GAKS = (GAKS_t)GetProcAddress(GetModuleHandleA("user32.dll"), "GetAsyncKeyState");
@@ -1426,6 +1446,7 @@ static void install(void)
         }
     }
     if (GetEnvironmentVariableA("WWJP_NOHOOK", NULL, 0)) return;
+#endif
     set_iat(0xD801EC, (void *)J_CreateFileA, (void *)real_CreateFileA);
     set_iat(0xD805A4, (void *)J_CreateFileA, (void *)real_CreateFileA);
     write_jmp(0x424C94, (void *)H_DrawString);
@@ -1442,7 +1463,9 @@ static void install(void)
         *(u8 *)0x4A66C5 = 0xFF;
         VirtualProtect((void *)0x4A66C5, 1, old, &old);
     }
+#ifdef WWJP_TEST
     if (logf && GetEnvironmentVariableA("WWJP_FMT", NULL, 0) && check(0x5AB186, "53515283EC04")) write_jmp(0x5AB186, (void *)H_Sprintf);
+#endif
     if (check(0x4A6550, "535152565755")) write_jmp(0x4A6550, (void *)H_FindKw);
     if (check(0x5ED456, "53697220456C676172")) patch_gm_names();   /* "Sir Elgar" */
     logp("準備できた\n");
